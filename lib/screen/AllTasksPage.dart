@@ -1,14 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:task_management/model/Task.dart';
-import 'package:task_management/service/firebase_service.dart';
-
-class AllTasksPage extends StatefulWidget {
-  const AllTasksPage({super.key});
-
-  @override
-  State<AllTasksPage> createState() => _AllTasksPageState();
-}
 
 // Task Model
 class Task {
@@ -55,6 +48,13 @@ extension TaskCopyWith on Task {
   }
 }
 
+class AllTasksPage extends StatefulWidget {
+  const AllTasksPage({super.key});
+
+  @override
+  State<AllTasksPage> createState() => _AllTasksPageState();
+}
+
 class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   List<Task> _tasks = [];
@@ -62,6 +62,7 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
   String _searchQuery = '';
   TaskStatus _currentFilter = TaskStatus.todo;
   bool _isGridView = false;
+  StreamSubscription<QuerySnapshot>? _taskSubscription;
 
   @override
   void initState() {
@@ -72,29 +73,49 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
 
   // Real-time Firestore listener
   void _listenToTasks() {
-    FirebaseFirestore.instance.collection('tasks').snapshots().listen((snapshot) {
-      final tasks = snapshot.docs.map((doc) {
-        final data = doc.data();
-        return Task(
-          id: data['id'],
-          title: data['title'],
-          description: data['description'],
-          project: data['project'],
-          assignedTo: data['assignedTo'],
-          dueDate: (data['dueDate'] as Timestamp).toDate(),
-          priority: TaskPriority.values.firstWhere(
-              (p) => p.toString().split('.').last == data['priority']),
-          status: TaskStatus.values.firstWhere(
-              (s) => s.toString().split('.').last == data['status']),
-          createdAt: (data['createdAt'] as Timestamp).toDate(),
-        );
-      }).toList();
+    _taskSubscription = FirebaseFirestore.instance.collection('tasks').snapshots().listen(
+      (snapshot) {
+        print('Received ${snapshot.docs.length} tasks from Firestore');
+        final tasks = snapshot.docs.map((doc) {
+          final data = doc.data();
+          print('Task data: $data');
+          try {
+            return Task(
+              id: doc.id, // Use Firestore document ID
+              title: data['title'] ?? '',
+              description: data['description'] ?? '',
+              project: data['project'] ?? '',
+              assignedTo: data['assignedTo'] ?? '',
+              dueDate: (data['dueDate'] as Timestamp?)?.toDate() ?? DateTime.now(),
+              priority: TaskPriority.values.firstWhere(
+                (p) => p.toString().split('.').last.toLowerCase() == (data['priority']?.toLowerCase() ?? 'low'),
+                orElse: () => TaskPriority.low,
+              ),
+              status: TaskStatus.values.firstWhere(
+                (s) => s.toString().split('.').last.toLowerCase() == (data['status']?.toLowerCase() ?? 'todo'),
+                orElse: () => TaskStatus.todo,
+              ),
+              createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+            );
+          } catch (e) {
+            print('Error parsing task ${doc.id}: $e');
+            return null;
+          }
+        }).where((task) => task != null).cast<Task>().toList();
 
-      setState(() {
-        _tasks = tasks;
-      });
-      _filterTasks();
-    });
+        setState(() {
+          _tasks = tasks;
+          print('Updated tasks: ${_tasks.length}');
+        });
+        _filterTasks();
+      },
+      onError: (error) {
+        print('Firestore listener error: $error');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error fetching tasks: $error')),
+        );
+      },
+    );
   }
 
   void _filterTasks() {
@@ -108,6 +129,7 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
                 task.description.toLowerCase().contains(_searchQuery.toLowerCase()) ||
                 task.project.toLowerCase().contains(_searchQuery.toLowerCase()))).toList();
       }
+      print('Filtered tasks: ${_filteredTasks.length} for status $_currentFilter');
     });
   }
 
@@ -137,18 +159,25 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
   }
 
   Future<void> _updateTaskStatus(String taskId, TaskStatus newStatus) async {
-    final taskIndex = _tasks.indexWhere((task) => task.id == taskId);
-    if (taskIndex != -1) {
-      _tasks[taskIndex] = _tasks[taskIndex].copyWith(status: newStatus);
+    try {
+      final taskIndex = _tasks.indexWhere((task) => task.id == taskId);
+      if (taskIndex != -1) {
+        _tasks[taskIndex] = _tasks[taskIndex].copyWith(status: newStatus);
 
-      // Update Firestore
-      await FirebaseFirestore.instance.collection('tasks').doc(taskId).update({
-        'status': newStatus.toString().split('.').last,
-        'updatedAt': Timestamp.now(),
-      });
+        // Update Firestore
+        await FirebaseFirestore.instance.collection('tasks').doc(taskId).update({
+          'status': newStatus.toString().split('.').last,
+          'updatedAt': Timestamp.now(),
+        });
 
-      _filterTasks();
-      Navigator.pop(context);
+        _filterTasks();
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      print('Error updating task status: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update task: $e')),
+      );
     }
   }
 
@@ -156,36 +185,55 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
     showDialog(
       context: context,
       builder: (context) => AddTaskDialog(onTaskAdded: (task) {
-        // Already handled by Firestore listener
+        // Handled by Firestore listener
       }),
     );
   }
 
   Color _getPriorityColor(TaskPriority priority) {
     switch (priority) {
-      case TaskPriority.low: return Colors.green;
-      case TaskPriority.medium: return Colors.orange;
-      case TaskPriority.high: return Colors.red;
-      case TaskPriority.urgent: return Colors.purple;
+      case TaskPriority.low:
+        return Colors.green;
+      case TaskPriority.medium:
+        return Colors.orange;
+      case TaskPriority.high:
+        return Colors.red;
+      case TaskPriority.urgent:
+        return Colors.purple;
     }
   }
 
   Color _getStatusColor(TaskStatus status) {
     switch (status) {
-      case TaskStatus.todo: return Colors.grey;
-      case TaskStatus.inProgress: return Colors.blue;
-      case TaskStatus.review: return Colors.orange;
-      case TaskStatus.completed: return Colors.green;
+      case TaskStatus.todo:
+        return Colors.grey;
+      case TaskStatus.inProgress:
+        return Colors.blue;
+      case TaskStatus.review:
+        return Colors.orange;
+      case TaskStatus.completed:
+        return Colors.green;
     }
   }
 
   String _getStatusText(TaskStatus status) {
     switch (status) {
-      case TaskStatus.todo: return 'To Do';
-      case TaskStatus.inProgress: return 'In Progress';
-      case TaskStatus.review: return 'Review';
-      case TaskStatus.completed: return 'Completed';
+      case TaskStatus.todo:
+        return 'To Do';
+      case TaskStatus.inProgress:
+        return 'In Progress';
+      case TaskStatus.review:
+        return 'Review';
+      case TaskStatus.completed:
+        return 'Completed';
     }
+  }
+
+  @override
+  void dispose() {
+    _taskSubscription?.cancel();
+    _tabController.dispose();
+    super.dispose();
   }
 
   @override
@@ -220,7 +268,13 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8, offset: const Offset(0, 2))],
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: TextField(
                 onChanged: _onSearchChanged,
@@ -274,12 +328,17 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
           const SizedBox(height: 16),
           Text('No tasks found', style: TextStyle(fontSize: 18, color: Colors.grey[600])),
           const SizedBox(height: 8),
-          Text(_searchQuery.isNotEmpty ? 'Try adjusting your search terms' : 'Create your first task to get started',
-              style: TextStyle(color: Colors.grey[400])),
+          Text(
+            _searchQuery.isNotEmpty ? 'Try adjusting your search terms' : 'Create your first task to get started',
+            style: TextStyle(color: Colors.grey[400]),
+          ),
           const SizedBox(height: 20),
           ElevatedButton(
             onPressed: _showAddTaskDialog,
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2563EB), padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
             child: const Text('Add New Task'),
           ),
         ],
@@ -302,7 +361,10 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
     return GridView.builder(
       padding: const EdgeInsets.all(16),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2, crossAxisSpacing: 16, mainAxisSpacing: 16, childAspectRatio: 0.9,
+        crossAxisCount: 2,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+        childAspectRatio: 0.9,
       ),
       itemCount: _filteredTasks.length,
       itemBuilder: (context, index) {
@@ -322,17 +384,31 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
         leading: Container(
           width: 40,
           height: 40,
-          decoration: BoxDecoration(color: _getStatusColor(task.status).withOpacity(0.1), shape: BoxShape.circle),
+          decoration: BoxDecoration(
+            color: _getStatusColor(task.status).withOpacity(0.1),
+            shape: BoxShape.circle,
+          ),
           child: Icon(Icons.task_alt, color: _getStatusColor(task.status)),
         ),
-        title: Text(task.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16), maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(
+          task.title,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SizedBox(height: 4),
             Text(task.project, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
             const SizedBox(height: 4),
-            Row(children: [Icon(Icons.person_outline, size: 12, color: Colors.grey[500]), const SizedBox(width: 4), Text(task.assignedTo, style: TextStyle(color: Colors.grey[600], fontSize: 12))])
+            Row(
+              children: [
+                Icon(Icons.person_outline, size: 12, color: Colors.grey[500]),
+                const SizedBox(width: 4),
+                Text(task.assignedTo, style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+              ],
+            ),
           ],
         ),
         trailing: Column(
@@ -340,10 +416,27 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
           children: [
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(color: _getPriorityColor(task.priority).withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-              child: Text(task.priority.toString().split('.').last.toUpperCase(), style: TextStyle(color: _getPriorityColor(task.priority), fontSize: 10, fontWeight: FontWeight.bold)),
+              decoration: BoxDecoration(
+                color: _getPriorityColor(task.priority).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                task.priority.toString().split('.').last.toUpperCase(),
+                style: TextStyle(
+                  color: _getPriorityColor(task.priority),
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
-            Text('${task.dueDate.difference(DateTime.now()).inDays}d', style: TextStyle(color: task.dueDate.isBefore(DateTime.now()) ? Colors.red : Colors.grey[600], fontSize: 12, fontWeight: FontWeight.bold)),
+            Text(
+              '${task.dueDate.difference(DateTime.now()).inDays}d',
+              style: TextStyle(
+                color: task.dueDate.isBefore(DateTime.now()) ? Colors.red : Colors.grey[600],
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ],
         ),
         onTap: () => _showTaskDetails(task),
@@ -366,28 +459,83 @@ class _AllTasksPageState extends State<AllTasksPage> with SingleTickerProviderSt
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Container(width: 32, height: 32, decoration: BoxDecoration(color: _getStatusColor(task.status).withOpacity(0.1), shape: BoxShape.circle), child: Icon(Icons.task_alt, size: 16, color: _getStatusColor(task.status))),
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: _getStatusColor(task.status).withOpacity(0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.task_alt, size: 16, color: _getStatusColor(task.status)),
+                  ),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(color: _getPriorityColor(task.priority).withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-                    child: Text(task.priority.toString().split('.').last[0], style: TextStyle(color: _getPriorityColor(task.priority), fontSize: 10, fontWeight: FontWeight.bold)),
+                    decoration: BoxDecoration(
+                      color: _getPriorityColor(task.priority).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      task.priority.toString().split('.').last[0].toUpperCase(),
+                      style: TextStyle(
+                        color: _getPriorityColor(task.priority),
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
-              Text(task.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), maxLines: 2, overflow: TextOverflow.ellipsis),
+              Text(
+                task.title,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
               const SizedBox(height: 8),
-              Text(task.project, style: TextStyle(color: Colors.grey[600], fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text(
+                task.project,
+                style: TextStyle(color: Colors.grey[600], fontSize: 11),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               const SizedBox(height: 8),
-              Row(children: [Icon(Icons.person_outline, size: 12, color: Colors.grey[500]), const SizedBox(width: 4), Expanded(child: Text(task.assignedTo, style: TextStyle(color: Colors.grey[600], fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis))]),
+              Row(
+                children: [
+                  Icon(Icons.person_outline, size: 12, color: Colors.grey[500]),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      task.assignedTo,
+                      style: TextStyle(color: Colors.grey[600], fontSize: 11),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
               const Spacer(),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('${task.dueDate.difference(DateTime.now()).inDays}d', style: TextStyle(color: task.dueDate.isBefore(DateTime.now()) ? Colors.red : Colors.grey[600], fontSize: 12, fontWeight: FontWeight.bold)),
-                  Text(_getStatusText(task.status), style: TextStyle(color: _getStatusColor(task.status), fontSize: 10, fontWeight: FontWeight.bold)),
+                  Text(
+                    '${task.dueDate.difference(DateTime.now()).inDays}d',
+                    style: TextStyle(
+                      color: task.dueDate.isBefore(DateTime.now()) ? Colors.red : Colors.grey[600],
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    _getStatusText(task.status),
+                    style: TextStyle(
+                      color: _getStatusColor(task.status),
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ],
-              )
+              ),
             ],
           ),
         ),
@@ -409,17 +557,32 @@ class TaskDetailsSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: MediaQuery.of(context).size.height * 0.85,
-      decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)))),
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
           const SizedBox(height: 24),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Text(task.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            Text(task.project, style: TextStyle(color: Colors.grey[600])),
-          ]),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(task.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              Text(task.project, style: TextStyle(color: Colors.grey[600])),
+            ],
+          ),
           const SizedBox(height: 16),
           Text(task.description, style: TextStyle(color: Colors.grey[700], fontSize: 14)),
           const SizedBox(height: 24),
@@ -427,7 +590,10 @@ class TaskDetailsSheet extends StatelessWidget {
           Text(task.assignedTo, style: TextStyle(color: Colors.grey[700])),
           const SizedBox(height: 24),
           const Text('Priority', style: TextStyle(fontWeight: FontWeight.bold)),
-          Text(task.priority.toString().split('.').last.toUpperCase(), style: TextStyle(color: Colors.grey[700])),
+          Text(
+            task.priority.toString().split('.').last.toUpperCase(),
+            style: TextStyle(color: Colors.grey[700]),
+          ),
           const SizedBox(height: 24),
           const Text('Status', style: TextStyle(fontWeight: FontWeight.bold)),
           Wrap(
@@ -451,6 +617,7 @@ class TaskDetailsSheet extends StatelessWidget {
 // --------------------
 class AddTaskDialog extends StatefulWidget {
   final Function(Task) onTaskAdded;
+
   const AddTaskDialog({super.key, required this.onTaskAdded});
 
   @override
@@ -473,42 +640,60 @@ class _AddTaskDialogState extends State<AddTaskDialog> {
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
-    if (picked != null) setState(() => _dueDate = picked);
+    if (picked != null) {
+      setState(() => _dueDate = picked);
+    }
   }
 
   void _addTask() async {
     if (_formKey.currentState!.validate()) {
-      final taskId = FirebaseFirestore.instance.collection('tasks').doc().id;
-      final now = DateTime.now();
+      try {
+        final taskId = FirebaseFirestore.instance.collection('tasks').doc().id;
+        final now = DateTime.now();
 
-      final newTask = Task(
-        id: taskId,
-        title: _titleController.text,
-        description: _descriptionController.text,
-        project: _projectController.text,
-        assignedTo: _assignedToController.text,
-        dueDate: _dueDate,
-        priority: _priority,
-        status: TaskStatus.todo,
-        createdAt: now,
-      );
+        final newTask = Task(
+          id: taskId,
+          title: _titleController.text,
+          description: _descriptionController.text,
+          project: _projectController.text,
+          assignedTo: _assignedToController.text,
+          dueDate: _dueDate,
+          priority: _priority,
+          status: TaskStatus.todo,
+          createdAt: now,
+        );
 
-      await FirebaseFirestore.instance.collection('tasks').doc(taskId).set({
-        'id': newTask.id,
-        'title': newTask.title,
-        'description': newTask.description,
-        'project': newTask.project,
-        'assignedTo': newTask.assignedTo,
-        'dueDate': Timestamp.fromDate(newTask.dueDate),
-        'priority': newTask.priority.toString().split('.').last,
-        'status': newTask.status.toString().split('.').last,
-        'createdAt': Timestamp.fromDate(newTask.createdAt),
-        'updatedAt': Timestamp.fromDate(newTask.createdAt),
-      });
+        await FirebaseFirestore.instance.collection('tasks').doc(taskId).set({
+          'title': newTask.title,
+          'description': newTask.description,
+          'project': newTask.project,
+          'assignedTo': newTask.assignedTo,
+          'dueDate': Timestamp.fromDate(newTask.dueDate),
+          'priority': newTask.priority.toString().split('.').last,
+          'status': newTask.status.toString().split('.').last,
+          'createdAt': Timestamp.fromDate(newTask.createdAt),
+          'updatedAt': Timestamp.fromDate(newTask.createdAt),
+        });
 
-      widget.onTaskAdded(newTask);
-      Navigator.pop(context);
+        print('Task added with ID: $taskId');
+        widget.onTaskAdded(newTask);
+        Navigator.pop(context);
+      } catch (e) {
+        print('Error adding task: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to add task: $e')),
+        );
+      }
     }
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _descriptionController.dispose();
+    _projectController.dispose();
+    _assignedToController.dispose();
+    super.dispose();
   }
 
   @override
@@ -520,21 +705,45 @@ class _AddTaskDialogState extends State<AddTaskDialog> {
           key: _formKey,
           child: Column(
             children: [
-              TextFormField(controller: _titleController, decoration: const InputDecoration(labelText: 'Title'), validator: (v) => v!.isEmpty ? 'Enter title' : null),
-              TextFormField(controller: _descriptionController, decoration: const InputDecoration(labelText: 'Description'), validator: (v) => v!.isEmpty ? 'Enter description' : null),
-              TextFormField(controller: _projectController, decoration: const InputDecoration(labelText: 'Project'), validator: (v) => v!.isEmpty ? 'Enter project' : null),
-              TextFormField(controller: _assignedToController, decoration: const InputDecoration(labelText: 'Assigned To'), validator: (v) => v!.isEmpty ? 'Enter name' : null),
+              TextFormField(
+                controller: _titleController,
+                decoration: const InputDecoration(labelText: 'Title'),
+                validator: (v) => v!.isEmpty ? 'Enter title' : null,
+              ),
+              TextFormField(
+                controller: _descriptionController,
+                decoration: const InputDecoration(labelText: 'Description'),
+                validator: (v) => v!.isEmpty ? 'Enter description' : null,
+              ),
+              TextFormField(
+                controller: _projectController,
+                decoration: const InputDecoration(labelText: 'Project'),
+                validator: (v) => v!.isEmpty ? 'Enter project' : null,
+              ),
+              TextFormField(
+                controller: _assignedToController,
+                decoration: const InputDecoration(labelText: 'Assigned To'),
+                validator: (v) => v!.isEmpty ? 'Enter name' : null,
+              ),
               const SizedBox(height: 12),
-              Row(children: [
-                const Text('Due Date: '),
-                TextButton(onPressed: _pickDueDate, child: Text('${_dueDate.year}-${_dueDate.month}-${_dueDate.day}'))
-              ]),
+              Row(
+                children: [
+                  const Text('Due Date: '),
+                  TextButton(
+                    onPressed: _pickDueDate,
+                    child: Text('${_dueDate.year}-${_dueDate.month}-${_dueDate.day}'),
+                  ),
+                ],
+              ),
               const SizedBox(height: 12),
               DropdownButtonFormField<TaskPriority>(
                 value: _priority,
                 decoration: const InputDecoration(labelText: 'Priority'),
                 items: TaskPriority.values
-                    .map((p) => DropdownMenuItem(value: p, child: Text(p.toString().split('.').last.toUpperCase())))
+                    .map((p) => DropdownMenuItem(
+                          value: p,
+                          child: Text(p.toString().split('.').last.toUpperCase()),
+                        ))
                     .toList(),
                 onChanged: (p) => setState(() => _priority = p!),
               ),
@@ -543,8 +752,14 @@ class _AddTaskDialogState extends State<AddTaskDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        ElevatedButton(onPressed: _addTask, child: const Text('Add Task')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _addTask,
+          child: const Text('Add Task'),
+        ),
       ],
     );
   }

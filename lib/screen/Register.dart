@@ -12,15 +12,28 @@ class _RegisterPageState extends State<RegisterPage> {
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
   final confirmPasswordController = TextEditingController();
-
+  bool _isButtonPressed = false;
 
   Future<void> register() async {
+    // Validate password and confirm password match
+    if (passwordController.text.trim() != confirmPasswordController.text.trim()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Passwords do not match"),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     try {
       await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: emailController.text.trim(),
         password: passwordController.text.trim(),
       );
-      Navigator.pop(context); // back to login
+      if (mounted) {
+        Navigator.pop(context); // Back to login
+      }
     } on FirebaseAuthException catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -29,6 +42,14 @@ class _RegisterPageState extends State<RegisterPage> {
         ),
       );
     }
+  }
+
+  @override
+  void dispose() {
+    emailController.dispose();
+    passwordController.dispose();
+    confirmPasswordController.dispose();
+    super.dispose();
   }
 
   @override
@@ -44,66 +65,132 @@ class _RegisterPageState extends State<RegisterPage> {
         ),
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(30),
+            padding: const EdgeInsets.all(20), // Reduced padding for compactness
             child: Card(
               elevation: 8,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20)),
-              child: Padding(
-                padding: const EdgeInsets.all(25),
+                borderRadius: BorderRadius.circular(16), // Matches DashboardPage
+              ),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.all(20),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
-                      "Create Account",
-                      style: TextStyle(
-                          fontSize: 28,
+                    AnimatedOpacity(
+                      opacity: _isButtonPressed ? 0.7 : 1.0,
+                      duration: const Duration(milliseconds: 200),
+                      child: const Text(
+                        "Create Account",
+                        style: TextStyle(
+                          fontFamily: 'Roboto',
+                          fontSize: 24, // Slightly smaller for compactness
                           fontWeight: FontWeight.bold,
-                          color: Colors.blueAccent),
+                          color: Color(0xFF3B82F6), // Matches DashboardPage
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 12), // Reduced spacing
                     TextField(
                       controller: emailController,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: "Email",
-                        prefixIcon: Icon(Icons.email),
-                        border: OutlineInputBorder(),
+                        prefixIcon: const Icon(Icons.email, color: Color(0xFF3B82F6)),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        filled: true,
+                        fillColor: Colors.white,
                       ),
+                      keyboardType: TextInputType.emailAddress,
                     ),
-                    const SizedBox(height: 15),
+                    const SizedBox(height: 10), // Reduced spacing
                     TextField(
                       controller: passwordController,
                       obscureText: true,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: "Password",
-                        prefixIcon: Icon(Icons.lock),
-                        border: OutlineInputBorder(),
+                        prefixIcon: const Icon(Icons.lock, color: Color(0xFF3B82F6)),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        filled: true,
+                        fillColor: Colors.white,
                       ),
                     ),
-                    const SizedBox(height: 15),
+                    const SizedBox(height: 10), // Reduced spacing
                     TextField(
-                      controller: passwordController,
+                      controller: confirmPasswordController, // Fixed controller
                       obscureText: true,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: "Confirm Password",
-                        prefixIcon: Icon(Icons.lock),
-                        border: OutlineInputBorder(),
+                        prefixIcon: const Icon(Icons.lock, color: Color(0xFF3B82F6)),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        filled: true,
+                        fillColor: Colors.white,
                       ),
                     ),
-                    const SizedBox(height: 25),
+                    const SizedBox(height: 16), // Reduced spacing
                     SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: register,
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                          backgroundColor: Colors.blueAccent,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: _isButtonPressed
+                                ? [const Color(0xFF3B82F6).withOpacity(0.7), const Color(0xFF8B5CF6).withOpacity(0.7)]
+                                : [const Color(0xFF3B82F6), const Color(0xFF8B5CF6)],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(_isButtonPressed ? 0.05 : 0.1),
+                              blurRadius: _isButtonPressed ? 4 : 8,
+                              offset: Offset(0, _isButtonPressed ? 2 : 4),
+                            ),
+                          ],
                         ),
-                        child: const Text(
-                          "Register",
-                          style: TextStyle(fontSize: 18),
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            setState(() => _isButtonPressed = true);
+                            await register();
+                            if (mounted) {
+                              setState(() => _isButtonPressed = false);
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12), // Reduced padding
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            backgroundColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                          ),
+                          child: const Text(
+                            "Register",
+                            style: TextStyle(
+                              fontFamily: 'Roboto',
+                              fontSize: 16, // Smaller font for compactness
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12), // Reduced spacing
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(context); // Back to login
+                      },
+                      child: const Text(
+                        "Already have an account? Login",
+                        style: TextStyle(
+                          fontFamily: 'Roboto',
+                          color: Color(0xFF3B82F6),
+                          fontSize: 14,
                         ),
                       ),
                     ),

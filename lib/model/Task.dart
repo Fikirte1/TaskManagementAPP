@@ -28,7 +28,6 @@ class Task {
     this.updatedAt,
   });
 
-  // Convert Task to Map for Firestore (matches your exact field structure)
   Map<String, dynamic> toMap() {
     return {
       'title': title,
@@ -43,66 +42,78 @@ class Task {
     };
   }
 
-  // Create Task from Firestore document
   factory Task.fromFirestore(DocumentSnapshot doc) {
     Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-    
     return Task(
       id: doc.id,
       title: data['title'] ?? '',
       description: data['description'] ?? '',
       project: data['project'] ?? '',
       assignedTo: data['assignedTo'] ?? '',
-      dueDate: (data['dueDate'] as Timestamp).toDate(),
+      dueDate: (data['dueDate'] as Timestamp?)?.toDate() ?? DateTime.now(),
       priority: _stringToPriority(data['priority'] ?? 'medium'),
       status: _stringToStatus(data['status'] ?? 'todo'),
-      createdAt: (data['createdAt'] as Timestamp).toDate(),
-      updatedAt: data['updatedAt'] != null 
-          ? (data['updatedAt'] as Timestamp).toDate()
-          : null,
+      createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      updatedAt: data['updatedAt'] != null ? (data['updatedAt'] as Timestamp).toDate() : null,
     );
   }
 
-  // Helper methods for enum conversion
   static String _priorityToString(TaskPriority priority) {
     switch (priority) {
-      case TaskPriority.low: return 'low';
-      case TaskPriority.medium: return 'medium';
-      case TaskPriority.high: return 'high';
-      case TaskPriority.urgent: return 'urgent';
+      case TaskPriority.low:
+        return 'low';
+      case TaskPriority.medium:
+        return 'medium';
+      case TaskPriority.high:
+        return 'high';
+      case TaskPriority.urgent:
+        return 'urgent';
     }
   }
 
   static TaskPriority _stringToPriority(String priority) {
-    switch (priority) {
-      case 'low': return TaskPriority.low;
-      case 'medium': return TaskPriority.medium;
-      case 'high': return TaskPriority.high;
-      case 'urgent': return TaskPriority.urgent;
-      default: return TaskPriority.medium;
+    switch (priority.toLowerCase()) {
+      case 'low':
+        return TaskPriority.low;
+      case 'medium':
+        return TaskPriority.medium;
+      case 'high':
+        return TaskPriority.high;
+      case 'urgent':
+        return TaskPriority.urgent;
+      default:
+        return TaskPriority.medium;
     }
   }
 
   static String _statusToString(TaskStatus status) {
     switch (status) {
-      case TaskStatus.todo: return 'todo';
-      case TaskStatus.inProgress: return 'inProgress';
-      case TaskStatus.review: return 'review';
-      case TaskStatus.completed: return 'completed';
+      case TaskStatus.todo:
+        return 'todo';
+      case TaskStatus.inProgress:
+        return 'inProgress';
+      case TaskStatus.review:
+        return 'review';
+      case TaskStatus.completed:
+        return 'completed';
     }
   }
 
   static TaskStatus _stringToStatus(String status) {
-    switch (status) {
-      case 'todo': return TaskStatus.todo;
-      case 'inProgress': return TaskStatus.inProgress;
-      case 'review': return TaskStatus.review;
-      case 'completed': return TaskStatus.completed;
-      default: return TaskStatus.todo;
+    switch (status.toLowerCase()) {
+      case 'todo':
+        return TaskStatus.todo;
+      case 'inProgress':
+        return TaskStatus.inProgress;
+      case 'review':
+        return TaskStatus.review;
+      case 'completed':
+        return TaskStatus.completed;
+      default:
+        return TaskStatus.todo;
     }
   }
 
-  // Copy with method
   Task copyWith({
     String? id,
     String? title,

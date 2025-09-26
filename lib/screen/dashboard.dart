@@ -1,16 +1,17 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:task_management/screen/AllTasksPage.dart';
 import 'package:task_management/screen/AssignTasksPage.dart';
 import 'package:task_management/screen/IssuesPage.dart';
 import 'package:task_management/screen/Login.dart';
-import 'package:task_management/screen/Notifications.dart';
+import 'package:task_management/screen/NotificationsPage.dart';
+import 'package:task_management/screen/ProfilePage.dart';
 import 'package:task_management/screen/ProjectsPage.dart';
 import 'package:task_management/screen/SchedulePage.dart';
 import 'package:task_management/screen/TrackProgress.dart';
 import 'package:task_management/screen/team_management_page.dart';
-import 'package:task_management/service/assignment_service.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -44,9 +45,7 @@ class DashboardCard extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         child: Container(
-          constraints: const BoxConstraints(
-            minHeight: 140,
-          ),
+          constraints: const BoxConstraints(minHeight: 140),
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topLeft,
@@ -132,38 +131,98 @@ enum MenuAction { profile, settings, logout }
 class _DashboardPageState extends State<DashboardPage> {
   int _selectedIndex = 0;
   int _unreadNotifications = 0;
-  StreamSubscription<int>? _unreadNotificationsSubscription;
+  int _pendingTasks = 0;
+  int _completedTasks = 0;
+  int _overdueTasks = 0;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _tasksSubscription;
+
   final user = FirebaseAuth.instance.currentUser;
 
   @override
   void initState() {
     super.initState();
-    _loadUnreadNotificationCount();
+    _loadTaskCounts();
   }
 
   @override
   void dispose() {
-    _unreadNotificationsSubscription?.cancel();
+    _tasksSubscription?.cancel();
     super.dispose();
   }
 
-  void _loadUnreadNotificationCount() {
-    if (user != null) {
-      _unreadNotificationsSubscription = AssignmentService.getUnreadNotificationCount(user!.uid).listen(
-        (count) {
-          if (mounted) {
-            setState(() {
-              _unreadNotifications = count;
-            });
-          }
-        },
-        onError: (error) {
-          debugPrint("Error loading unread notifications: $error");
-        },
-      );
-    }
-  }
+ void _loadTaskCounts() {
+  if (user != null) {
+    _tasksSubscription = FirebaseFirestore.instance
+        .collection('tasks')
+        .where('assignedUserId', isEqualTo: user!.uid)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        int unreadCount = 0;
+        int pendingCount = 0;
+        int completedCount = 0;
+        int overdueCount = 0;
+        final now = DateTime.now();
 
+        for (var doc in snapshot.docs) {
+          final data = doc.data();
+          
+          // Count unread notifications
+          if (data['isRead'] == false) {
+            unreadCount++;
+          }
+          
+          // Count by status
+          switch (data['status']) {
+            case 'pending':
+              pendingCount++;
+              break;
+            case 'completed':
+              completedCount++;
+              break;
+            case 'in progress':
+              pendingCount++; // or create separate counter if needed
+              break;
+          }
+          
+          // Count overdue tasks
+          if (data['dueDate'] != null && 
+              data['status'] != 'completed' &&
+              (data['dueDate'] as Timestamp).toDate().isBefore(now)) {
+            overdueCount++;
+          }
+        }
+
+        if (mounted) {
+          setState(() {
+            _unreadNotifications = unreadCount;
+            _pendingTasks = pendingCount;
+            _completedTasks = completedCount;
+            _overdueTasks = overdueCount;
+          });
+        }
+      },
+      onError: (error) {
+        print('Error loading tasks: $error');
+      },
+    );
+  }
+}
+void _showSettingsDialog(BuildContext context) {
+  showDialog(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Settings'),
+      content: const Text('Settings page coming soon!'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
+}
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
@@ -201,7 +260,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   Expanded(
                     child: _buildStatCard(
                       "Pending",
-                      "8",
+                      _pendingTasks.toString(),
                       Icons.schedule,
                       const Color(0xFFFFF3CD),
                       const Color(0xFF856404),
@@ -211,7 +270,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   Expanded(
                     child: _buildStatCard(
                       "Completed",
-                      "24",
+                      _completedTasks.toString(),
                       Icons.check_circle,
                       const Color(0xFFD4EDDA),
                       const Color(0xFF155724),
@@ -221,7 +280,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   Expanded(
                     child: _buildStatCard(
                       "Overdue",
-                      "3",
+                      _overdueTasks.toString(),
                       Icons.warning,
                       const Color(0xFFF8D7DA),
                       const Color(0xFF721C24),
@@ -230,6 +289,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 ],
               ),
             ),
+            const SizedBox(height: 16),
+            _buildNotificationsCard(),
             const SizedBox(height: 32),
             const Text(
               "Quick Actions",
@@ -303,6 +364,112 @@ class _DashboardPageState extends State<DashboardPage> {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNotificationsCard() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const NotificationsPage()),
+            );
+          },
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+                    ),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.notifications,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Notifications',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      Text(
+                        _unreadNotifications > 0
+                            ? '$_unreadNotifications new notifications'
+                            : 'No new notifications',
+                        style: TextStyle(
+                          color: _unreadNotifications > 0
+                              ? const Color(0xFFEF4444)
+                              : Colors.black54,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Stack(
+                  children: [
+                    Icon(
+                      Icons.arrow_forward_ios,
+                      color: Colors.grey[400],
+                      size: 16,
+                    ),
+                    if (_unreadNotifications > 0)
+                      Positioned(
+                        right: 0,
+                        top: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFEF4444),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text(
+                            '$_unreadNotifications',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -454,7 +621,7 @@ class _DashboardPageState extends State<DashboardPage> {
                       shape: BoxShape.circle,
                     ),
                     child: Text(
-                      '$_unreadNotifications',
+                      '${_unreadNotifications > 99 ? '99+' : _unreadNotifications}',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 12,
@@ -465,18 +632,25 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
             ],
           ),
-          PopupMenuButton<MenuAction>(
-            onSelected: (MenuAction result) {
-              switch (result) {
-                case MenuAction.profile:
-                  break;
-                case MenuAction.settings:
-                  break;
-                case MenuAction.logout:
-                  _logout();
-                  break;
-              }
-            },
+        PopupMenuButton<MenuAction>(
+  onSelected: (MenuAction result) {
+    switch (result) {
+      case MenuAction.profile:
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const ProfilePage()),
+        );
+        break;
+      case MenuAction.settings:
+        // You can add settings navigation here too
+        _showSettingsDialog(context);
+        break;
+      case MenuAction.logout:
+        _logout();
+        break;
+    }
+  },
+  
             itemBuilder: (BuildContext context) => <PopupMenuEntry<MenuAction>>[
               PopupMenuItem<MenuAction>(
                 value: MenuAction.profile,

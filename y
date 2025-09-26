@@ -1,8 +1,7 @@
-
 {
   "indexes": [
     {
-      "collectionGroup": "notifications",
+      "collectionGroup": "notification%20",
       "queryScope": "COLLECTION",
       "fields": [
         {
@@ -17,7 +16,9 @@
           "fieldPath": "name",
           "order": "DESCENDING"
         }
-      ]
+      ],
+      "density": "SPARSE_ALL"
     }
-  ]
+  ],
+  "fieldOverrides": []
 }
